@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# VSCode
+.vscode/
+
+# Banco de dados local
+*.db
+*.sql
+
+# Credenciais
+*.ini
+*.cfg
+*.json
