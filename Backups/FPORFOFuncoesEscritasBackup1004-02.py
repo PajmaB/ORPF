@@ -24,10 +24,10 @@ registros2 = cursor.fetchall()
 quantDeBarras = len(registros2)
 
 
-# Definindo variáveis simbólicas fora do loop (mantidas apenas para a FO)
+# Definindo variáveis simbólicas fora do loop
 GkmR, TkmR, VkR, VmR, ThetaKR, ThetaMR, BkmR, BshR = sp.symbols("Gkm Tkm Vk Vm ThetaK ThetaM Bkm Bsh")
 
-# Expressão simbólica da função objetivo (Perdas Ativas)
+# Expressão simbólica da função objetivo
 funcaoResol = "Gkm*((1/Tkm**2)*Vk**2 + Vm**2 - 2*(1/Tkm)*Vk*Vm*cos(ThetaK - ThetaM))"
 expr = sp.sympify(funcaoResol, locals={"cos": sp.cos})
 
@@ -35,9 +35,7 @@ expr = sp.sympify(funcaoResol, locals={"cos": sp.cos})
 resultadoF = 0
 FuncaoObjetivoEscrita = ""
 
-# =========================================================================
-# FUNÇÃO OBJETIVO
-# =========================================================================
+
 for x in range(1, quantDeRegistros + 1):
     cursor.execute("SELECT Gkm, Bkm, Tap, Barra_Origem, Barra_Destino FROM dadoslinha WHERE Linha = %s", (x,))
     resultado = cursor.fetchone()
@@ -60,19 +58,22 @@ for x in range(1, quantDeRegistros + 1):
         cursor.execute("SELECT Teta FROM dadosbarra WHERE barra = %s", (BarraDestino,))
         result = cursor.fetchone()
         ThetaM = result[0]
-        
-        if Tkm == 0: Tkm = 1
-
-        # Cálculo da Função Objetivo usando math
-        resultado_termo = Gkm * (
-            (1/Tkm**2) * Vk**2 + Vm**2 - 2 * (1/Tkm) * Vk * Vm * math.cos(ThetaK - ThetaM)
-        )
-
-        resultadoF += resultado_termo
 
         cosThetaKM = math.cos(ThetaK - ThetaM)
+
+        resultado = expr.subs({
+            GkmR: Gkm,
+            TkmR: Tkm if Tkm != 0 else 1,
+            VkR: Vk,
+            VmR: Vm,
+            ThetaKR: ThetaK,
+            ThetaMR: ThetaM
+        })
+
+        resultadoF += resultado
+
         termo = f"{Gkm}*((1/{Tkm}^2)*{Vk}^2 + {Vm}^2 - 2*(1/{Tkm})*{Vk}*{Vm}*{cosThetaKM}) \n"
-        
+       
         if x < quantDeRegistros:
             termo += " + "
         FuncaoObjetivoEscrita += termo
@@ -90,43 +91,36 @@ linhasPorBarra_Destino = {barra: [] for barra in range(1, quantDeBarras + 1)}
 cursor.execute("SELECT Linha, Barra_Origem, Barra_Destino FROM dadoslinha")
 todas_linhas = cursor.fetchall()
 for linha, origem, destino in todas_linhas:
+    if origem == ignora or destino == ignora:
+        continue
     linhasPorBarra_Origem[origem].append(linha)
     linhasPorBarra_Destino[destino].append(linha)
 
-# -------------------------------------------------------------------------
-# FUNÇÕES DE FLUXO DE POTÊNCIA ATIVA (Pkm) - CORREÇÃO JÁ APLICADA
-# -------------------------------------------------------------------------
-
-# Pk para barra de origem (k)
-def Pkm_Origem(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM):
-    return (Gkm * (1/Tkm**2) * Vk**2) - ((1/Tkm) * Vk * Vm * (Gkm * math.cos(ThetaK - ThetaM) + Bkm * math.sin(ThetaK - ThetaM)))
-
-# Pmk para barra de destino (k)
-def Pkm_Destino(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM):
-    # O Vk aqui é a tensão da barra de destino (i) e Vm é a tensão da origem da linha
-    return (Gkm * Vk**2) - ((1/Tkm) * Vk * Vm * (Gkm * math.cos(ThetaK - ThetaM) + Bkm * math.sin(ThetaK - ThetaM)))
-
-
 # Construção das restrições de potência ativa (Pkm)
 funcRest1Escrita = ""
+funcRest1 = ""
+
+funcaoRest1_BarraOrigem = "((Gkm*(1/Tkm**2))*(Vk**2) - ((1/Tkm)*Vk)*Vm*((Gkm*cos(ThetaK - ThetaM) + Bkm*sin(ThetaK - ThetaM))))"
+
+funcaoRest1_BarraDestino = "((Gkm*(Vk**2)) - ((1/Tkm)*Vk)*Vm*((Gkm*cos(ThetaK - ThetaM) + Bkm*sin(ThetaK - ThetaM))))"
+
 
 for i in range(1, quantDeBarras + 1):
     if i == ignora:
         continue
 
-    # Busca dados da barra i
     cursor.execute("SELECT Tipo, PG, QG, Qmin_G, Qmax_G, PC, QC, Bsh FROM dadosbarra WHERE barra = %s", (i,))
-    Tipo, Pg, Qg, Qmin_G, Qmax_G, Pc, Qc, Bsh_barra = cursor.fetchone()
+    Tipo, Pg, Qg, Qmin_G, Qmax_G, Pc, Qc, Bsh = cursor.fetchone()
 
-    # Variável acumuladora para o fluxo de potência ativa injetada na barra i
-    potencia_fluxo_i = 0 
+    # Var para acumular o fluxo de potencia ativa injetada na barra 
+    potencia_fluxo_i = 0
     termos = []
-    
-    # === Fluxo de potência Pkm, onde i é a Barra de ORIGEM (k) ===
+
     for linha in linhasPorBarra_Origem[i]:
         cursor.execute("SELECT Gkm, Bkm, Tap, Barra_Origem, Barra_Destino FROM dadoslinha WHERE Linha = %s", (linha,))
         Gkm, Bkm, Tkm, BarraOrigem, BarraDestino = cursor.fetchone()
-        if Tkm == 0: Tkm = 1
+        if Tkm == 0:
+            Tkm = 1
 
         cursor.execute("SELECT V FROM dadosbarra WHERE barra = %s", (BarraOrigem,))
         result = cursor.fetchone()
@@ -147,70 +141,79 @@ for i in range(1, quantDeBarras + 1):
         cosThetaKM = math.cos(ThetaK - ThetaM)
         sinThetaKM = math.sin(ThetaK - ThetaM)
 
-        # CÁLCULO DIRETO COM FLOAT
-        potencia_fluxo_linha = Pkm_Origem(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM)
-        potencia_fluxo_i += potencia_fluxo_linha 
+        exprRest1 = sp.sympify(funcaoRest1_BarraOrigem, locals={"cos": sp.cos, "sin": sp.sin})
+
+        # CÁLCULO E ACUMULAÇÃO CORRIGIDA
+        potencia_fluxo_linha = exprRest1.subs({
+            GkmR: Gkm,
+            TkmR: Tkm,
+            VkR: Vk,
+            VmR: Vm,
+            ThetaKR: ThetaK,
+            ThetaMR: ThetaM
+        })
         
-        termo = f"(({Gkm}*(1/{Tkm}**2))*({Vk}**2) - ((1/{Tkm})*{Vk})*{Vm}*((({Gkm})*({cosThetaKM})) + ({Bkm})*({sinThetaKM}))) \n"
+        potencia_fluxo_i += potencia_fluxo_linha # ACUMULAÇÃO
+        
+        termo = f"(({Gkm}*(1/{Tkm}**2))*({Vk}**2) - ((1/{Tkm})*{Vk})*{Vm}*((({Gkm})*({cosThetaKM})) + ({Bkm})*({sinThetaKM})) \n"
         termos.append(termo)
 
-
-    # === Fluxo de potência Pkm, onde i é a Barra de DESTINO (k) - Pmk ===
     for linha in linhasPorBarra_Destino[i]:
         cursor.execute("SELECT Gkm, Bkm, Tap, Barra_Origem, Barra_Destino FROM dadoslinha WHERE Linha = %s", (linha,))
         Gkm, Bkm, Tkm, BarraOrigem, BarraDestino = cursor.fetchone()
-        
-        if Tkm == 0: Tkm = 1
-            
-        # Para o fluxo M->K, V_k é a tensão da barra i (destino) e V_m é a da origem (BarraOrigem)
+
+        if Tkm == 0:
+            Tkm = 1
+
+
         cursor.execute("SELECT V FROM dadosbarra WHERE barra = %s", (BarraOrigem,))
         result = cursor.fetchone()
-        Vm_origem = result[0] 
+        Vk = result[0]
         
         cursor.execute("SELECT V FROM dadosbarra WHERE barra = %s", (BarraDestino,))
         result = cursor.fetchone()
-        Vk_destino = result[0] # V da barra i
-        
+        Vm = result[0]  
+
         cursor.execute("SELECT Teta FROM dadosbarra WHERE barra = %s", (BarraOrigem,))
         result = cursor.fetchone()
-        ThetaM_origem = result[0]
+        ThetaK = result[0]
 
         cursor.execute("SELECT Teta FROM dadosbarra WHERE barra = %s", (BarraDestino,))
         result = cursor.fetchone()
-        ThetaK_destino = result[0] # Teta da barra i
+        ThetaM = result[0]
 
-        cosThetaKM = math.cos(ThetaK_destino - ThetaM_origem)
-        sinThetaKM = math.sin(ThetaK_destino - ThetaM_origem)
+        cosThetaKM = math.cos(ThetaK - ThetaM)
+        sinThetaKM = math.sin(ThetaK - ThetaM)
 
-        # CÁLCULO DIRETO COM FLOAT
-        potencia_fluxo_linha = Pkm_Destino(Gkm, Bkm, Tkm, Vk_destino, Vm_origem, ThetaK_destino, ThetaM_origem)
-        potencia_fluxo_i += potencia_fluxo_linha
+        exprRest1 = sp.sympify(funcaoRest1_BarraDestino, locals={"cos": sp.cos, "sin": sp.sin})
+
+        resultadoRest1 = exprRest1.subs({
+            GkmR: Gkm,
+            TkmR: Tkm if Tkm != 0 else 1,
+            VkR: Vk,
+            VmR: Vm,
+            ThetaKR: ThetaK,
+            ThetaMR: ThetaM
+        })
+
+        potencia_fluxo_i += potencia_fluxo_linha # ACUMULAÇÃO
         
-        termo = f"(({Gkm}*({Vk_destino}**2)) - ((1/{Tkm})*{Vk_destino})*{Vm_origem}*((({Gkm})*({cosThetaKM})) + ({Bkm})*({sinThetaKM}))) \n"
+        termo = f"(({Gkm}*({Vk}**2)) - ((1/{Tkm})*{Vk})*{Vm}*((({Gkm})*({cosThetaKM})) + ({Bkm})*({sinThetaKM})) \n"
         termos.append(termo)
-    
-    # O resultado final da restrição é a soma dos fluxos menos a potência líquida injetada (PG - PC)
-    resultadoRest1F = potencia_fluxo_i - Pg + Pc
-    
+        
+    resultadoRest1F = potencia_fluxo_i - Pg + Pc     
     funcRest1 = " + ".join(termos)
-    funcRest1Escrita += f"\nRestrição da Barra {i}:\n{funcRest1}  - {Pg} + {Pc} = {resultadoRest1F}\n ----------------------- X --------------------- \n"
+    funcRest1Escrita += f"\nRestrição da Barra {i}:\n{funcRest1}  - {Pg} + {Pc} = {resultadoRest1F}\n ----------------------- X --------------------- \n"
 
 
-# -------------------------------------------------------------------------
-# FUNÇÕES DE FLUXO DE POTÊNCIA REATIVA (Qkm) - CORREÇÃO APLICADA AQUI
-# -------------------------------------------------------------------------
 funcRest2Escrita = ""
 
-# Expressões para o fluxo de potência reativa (Qkm)
-def Qkm_Origem(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM, Bsh_linha):
-    # Fórmula: [ - (Bkm / Tkm^2) + Bsh_linha ] * Vk^2 + (Vk Vm / Tkm) * [ Bkm cos(...) - Gkm sin(...) ]
-    return ((-1 * (Bkm * (1/Tkm**2)) + Bsh_linha) * Vk**2) + ((1/Tkm) * Vk * Vm * (Bkm * math.cos(ThetaK - ThetaM) - Gkm * math.sin(ThetaK - ThetaM)))
+funcaoRest2_BarraOrigem = "(-1*((Bkm*(1/Tkm**2))) + Bsh) * (Vk**2) + ((1/Tkm)*Vk)*Vm*((Bkm*cos(ThetaK - ThetaM)) - (Gkm*sin(ThetaK - ThetaM)))"
 
-def Qkm_Destino(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM, Bsh_linha):
-    # Vk é a tensão da barra i (destino)
-    # Fórmula: [ - (Bkm + Bsh_linha) ] * Vk^2 + (Vk Vm / Tkm) * [ Bkm cos(...) - Gkm sin(...) ]
-    return ((-1 * (Bkm + Bsh_linha)) * Vk**2) + ((1/Tkm) * Vk * Vm * (Bkm * math.cos(ThetaK - ThetaM) - Gkm * math.sin(ThetaK - ThetaM)))
+funcaoRest2_BarraDestino = "(-1*(Bkm + Bsh)) * (Vk**2) + ((1/Tkm)*Vk)*Vm*((Bkm*cos(ThetaK - ThetaM)) - (Gkm*sin(ThetaK - ThetaM)))"
 
+resultadoRest2 = 0 
+resultadoRest2F = 0 
 
 for i in range(1, quantDeBarras + 1):
     if i == ignora:
@@ -218,19 +221,20 @@ for i in range(1, quantDeBarras + 1):
 
     cursor.execute("SELECT Tipo, PG, QG, Qmin_G, Qmax_G, PC, QC, Bsh FROM dadosbarra WHERE barra = %s", (i,))
     Tipo, Pg, Qg, Qmin_G, Qmax_G, Pc, Qc, Bshk = cursor.fetchone()
-    
     if Tipo != 0:
         continue
     
-    potencia_refluxo_i = 0
     termos = []
 
-    # === Fluxo de potência Qkm, onde i é a Barra de ORIGEM (k) ===
     for linha in linhasPorBarra_Origem[i]:
-        cursor.execute("SELECT Gkm, Bkm, Tap, Barra_Origem, Barra_Destino, Bsh FROM dadoslinha WHERE Linha = %s", (linha,))
-        Gkm, Bkm, Tkm, BarraOrigem, BarraDestino, Bsh_linha = cursor.fetchone()
+        if Tipo != 0:
+            continue
 
-        if Tkm == 0: Tkm = 1
+        cursor.execute("SELECT Gkm, Bkm, Tap, Barra_Origem, Barra_Destino, Bsh FROM dadoslinha WHERE Linha = %s", (linha,))
+        Gkm, Bkm, Tkm, BarraOrigem, BarraDestino, Bsh = cursor.fetchone()
+
+        if Tkm == 0:
+            Tkm = 1
 
         cursor.execute("SELECT V FROM dadosbarra WHERE barra = %s", (BarraOrigem,))
         result = cursor.fetchone()
@@ -251,61 +255,73 @@ for i in range(1, quantDeBarras + 1):
         cosThetaKM = math.cos(ThetaK - ThetaM)
         sinThetaKM = math.sin(ThetaK - ThetaM)
 
-        # CÁLCULO DIRETO COM FLOAT (CORREÇÃO DE PRECISÃO)
-        potencia_refluxo_linha = Qkm_Origem(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM, Bsh_linha)
-        potencia_refluxo_i += potencia_refluxo_linha 
+        exprRest2 = sp.sympify(funcaoRest2_BarraOrigem, locals={"cos": sp.cos, "sin": sp.sin})
 
-        termo = f"((-1*(({Bkm}*(1/{Tkm}**2))) + {Bsh_linha}) * ({Vk}**2) + ((1/{Tkm})*{Vk})*{Vm}*(({Bkm}*{cosThetaKM}) - ({Gkm}*{sinThetaKM}))) \n"
+        resultadoRest2 = exprRest2.subs({
+            GkmR: Gkm,
+            TkmR: Tkm if Tkm != 0 else 1,
+            VkR: Vk,
+            VmR: Vm,
+            BkmR: Bkm,
+            BshR: Bsh,
+            ThetaKR: ThetaK,
+            ThetaMR: ThetaM
+        })
+       
+        resultadoRest2F += resultadoRest2 - Qg + Qc - 0
+
+        termo = f"(-1*(({Bkm}*(1/{Tkm}**2))) + {Bsh}) * ({Vk}**2) + ((1/{Tkm})*{Vk})*{Vm}*(({Bkm}*{cosThetaKM}) - ({Gkm}*{sinThetaKM})) \n"
         termos.append(termo)
     
-    # === Fluxo de potência Qmk, onde i é a Barra de DESTINO (k) ===
     for linha in linhasPorBarra_Destino[i]:
+        if Tipo != 0:
+            continue
 
         cursor.execute("SELECT Gkm, Bkm, Tap, Barra_Origem, Barra_Destino, Bsh FROM dadoslinha WHERE Linha = %s", (linha,))
-        Gkm, Bkm, Tkm, BarraOrigem, BarraDestino, Bsh_linha = cursor.fetchone()
+        Gkm, Bkm, Tkm, BarraOrigem, BarraDestino, Bsh = cursor.fetchone()
 
-        if Tkm == 0: Tkm = 1
+        if Tkm == 0:
+            Tkm = 1
 
-        # V_m é a tensão da barra de origem (BarraOrigem) e V_k é a da destino (BarraDestino = i)
         cursor.execute("SELECT V FROM dadosbarra WHERE barra = %s", (BarraOrigem,))
         result = cursor.fetchone()
-        Vm_origem = result[0] 
+        Vk = result[0]
         
         cursor.execute("SELECT V FROM dadosbarra WHERE barra = %s", (BarraDestino,))
         result = cursor.fetchone()
-        Vk_destino = result[0] 
+        Vm = result[0]
 
         cursor.execute("SELECT Teta FROM dadosbarra WHERE barra = %s", (BarraOrigem,))
         result = cursor.fetchone()
-        ThetaM_origem = result[0]
+        ThetaK = result[0]
 
         cursor.execute("SELECT Teta FROM dadosbarra WHERE barra = %s", (BarraDestino,))
         result = cursor.fetchone()
-        ThetaK_destino = result[0]
+        ThetaM = result[0]
 
-        cosThetaKM = math.cos(ThetaK_destino - ThetaM_origem)
-        sinThetaKM = math.sin(ThetaK_destino - ThetaM_origem)
+        cosThetaKM = math.cos(ThetaK - ThetaM)
+        sinThetaKM = math.sin(ThetaK - ThetaM)
 
-        # CÁLCULO DIRETO COM FLOAT (CORREÇÃO DE PRECISÃO)
-        potencia_refluxo_linha = Qkm_Destino(Gkm, Bkm, Tkm, Vk_destino, Vm_origem, ThetaK_destino, ThetaM_origem, Bsh_linha)
-        potencia_refluxo_i += potencia_refluxo_linha 
+        exprRest2 = sp.sympify(funcaoRest2_BarraDestino, locals={"cos": sp.cos, "sin": sp.sin})
 
-        termo = f"((-1*({Bkm} + {Bsh_linha})) * ({Vk_destino}**2) + ((1/{Tkm})*{Vk_destino})*{Vm_origem}*(({Bkm}*{cosThetaKM}) - ({Gkm}*{sinThetaKM}))) \n"
+        resultadoRest2 = exprRest2.subs({
+            GkmR: Gkm,
+            TkmR: Tkm if Tkm != 0 else 1,
+            VkR: Vk,
+            VmR: Vm,
+            BkmR: Bkm,
+            BshR: Bsh,
+            ThetaKR: ThetaK,
+            ThetaMR: ThetaM
+        })
+        
+        resultadoRest2F += resultadoRest2 - Qg + Qc - 0
+
+        termo = f"(-1*({Bkm} + {Bsh})) * ({Vk}**2) + ((1/{Tkm})*{Vk})*{Vm}*(({Bkm}*{cosThetaKM}) - ({Gkm}*{sinThetaKM})) \n"
         termos.append(termo)
 
-    # QSHk é a potência reativa do shunt da barra: Bshk * V_i^2
-    # É necessário garantir que Vk_destino exista, o que ocorre apenas se a barra i for destino de alguma linha.
-    # Caso contrário, Bshk * V_i^2 = 0.
-    Vk_i = Vk_destino if 'Vk_destino' in locals() else 0
-    cursor.execute("SELECT V FROM dadosbarra WHERE barra = %s", (i,))
-    Vk_i = cursor.fetchone()[0]
-    
-    QSHk = Bshk * (Vk_i**2)
-    
-    resultadoRest2F = potencia_refluxo_i - Qg + Qc - QSHk
-
     restricao2 = " + ".join(termos)
-    funcRest2Escrita += f"\nRestrição da Barra {i}:\n{restricao2}  - {Qg} + {Qc} - {QSHk} = {resultadoRest2F}\n ----------------------- X --------------------- \n"
+    funcRest2Escrita += f"\nRestrição da Barra {i}:\n{restricao2}  - {Qg} + {Qc} - 0 = {resultadoRest2F}\n ----------------------- X --------------------- \n"
 
 
 funcRest3Escrita = ""
@@ -333,9 +349,6 @@ for linha_id, barraOrigem, barraDestino in todas_linhas:
     termo5 = f"10 <= T{barraOrigem}_{barraDestino} <= 10"
     funcRest5Escrita += f"\nRestrição de Tap da Linha {linha_id} (Barra {barraOrigem} - Barra {barraDestino}):\n{termo5}\n-----------------------------\n"
 
-# Fechando a conexão
-cursor.close()
-conexao.close()
     
 print("_________________________RESTRIÇAO 1_________________________")
 print("_________________________Pkm − PGk + PCk = 0, ∀k ∈ G' ∪ C_________________________")

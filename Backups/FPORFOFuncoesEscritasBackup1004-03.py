@@ -63,7 +63,7 @@ for x in range(1, quantDeRegistros + 1):
         
         if Tkm == 0: Tkm = 1
 
-        # Cálculo da Função Objetivo usando math
+        # Cálculo da Função Objetivo usando math (mais preciso que a subs, mas mantendo a subs para consistência da FO)
         resultado_termo = Gkm * (
             (1/Tkm**2) * Vk**2 + Vm**2 - 2 * (1/Tkm) * Vk * Vm * math.cos(ThetaK - ThetaM)
         )
@@ -93,22 +93,19 @@ for linha, origem, destino in todas_linhas:
     linhasPorBarra_Origem[origem].append(linha)
     linhasPorBarra_Destino[destino].append(linha)
 
-# -------------------------------------------------------------------------
-# FUNÇÕES DE FLUXO DE POTÊNCIA ATIVA (Pkm) - CORREÇÃO JÁ APLICADA
-# -------------------------------------------------------------------------
+# Construção das restrições de potência ativa (Pkm)
+funcRest1Escrita = ""
 
-# Pk para barra de origem (k)
+# Expressões para o fluxo de potência ativa (Pkm)
+# CORREÇÃO: Pk para barra de origem (k)
 def Pkm_Origem(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM):
     return (Gkm * (1/Tkm**2) * Vk**2) - ((1/Tkm) * Vk * Vm * (Gkm * math.cos(ThetaK - ThetaM) + Bkm * math.sin(ThetaK - ThetaM)))
 
-# Pmk para barra de destino (k)
+# CORREÇÃO: Pmk para barra de destino (k)
 def Pkm_Destino(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM):
     # O Vk aqui é a tensão da barra de destino (i) e Vm é a tensão da origem da linha
     return (Gkm * Vk**2) - ((1/Tkm) * Vk * Vm * (Gkm * math.cos(ThetaK - ThetaM) + Bkm * math.sin(ThetaK - ThetaM)))
 
-
-# Construção das restrições de potência ativa (Pkm)
-funcRest1Escrita = ""
 
 for i in range(1, quantDeBarras + 1):
     if i == ignora:
@@ -147,7 +144,7 @@ for i in range(1, quantDeBarras + 1):
         cosThetaKM = math.cos(ThetaK - ThetaM)
         sinThetaKM = math.sin(ThetaK - ThetaM)
 
-        # CÁLCULO DIRETO COM FLOAT
+        # CÁLCULO DIRETO COM FLOAT (CORREÇÃO DE PRECISÃO)
         potencia_fluxo_linha = Pkm_Origem(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM)
         potencia_fluxo_i += potencia_fluxo_linha 
         
@@ -182,10 +179,11 @@ for i in range(1, quantDeBarras + 1):
         cosThetaKM = math.cos(ThetaK_destino - ThetaM_origem)
         sinThetaKM = math.sin(ThetaK_destino - ThetaM_origem)
 
-        # CÁLCULO DIRETO COM FLOAT
+        # CÁLCULO DIRETO COM FLOAT (CORREÇÃO DE PRECISÃO)
         potencia_fluxo_linha = Pkm_Destino(Gkm, Bkm, Tkm, Vk_destino, Vm_origem, ThetaK_destino, ThetaM_origem)
         potencia_fluxo_i += potencia_fluxo_linha
         
+        # A string de visualização mantém a sua sintaxe original (que é o que resulta no -41.5121 na calculadora)
         termo = f"(({Gkm}*({Vk_destino}**2)) - ((1/{Tkm})*{Vk_destino})*{Vm_origem}*((({Gkm})*({cosThetaKM})) + ({Bkm})*({sinThetaKM}))) \n"
         termos.append(termo)
     
@@ -196,19 +194,15 @@ for i in range(1, quantDeBarras + 1):
     funcRest1Escrita += f"\nRestrição da Barra {i}:\n{funcRest1}  - {Pg} + {Pc} = {resultadoRest1F}\n ----------------------- X --------------------- \n"
 
 
-# -------------------------------------------------------------------------
-# FUNÇÕES DE FLUXO DE POTÊNCIA REATIVA (Qkm) - CORREÇÃO APLICADA AQUI
-# -------------------------------------------------------------------------
+# Construção das restrições de potência reativa (Qkm)
 funcRest2Escrita = ""
 
 # Expressões para o fluxo de potência reativa (Qkm)
 def Qkm_Origem(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM, Bsh_linha):
-    # Fórmula: [ - (Bkm / Tkm^2) + Bsh_linha ] * Vk^2 + (Vk Vm / Tkm) * [ Bkm cos(...) - Gkm sin(...) ]
     return ((-1 * (Bkm * (1/Tkm**2)) + Bsh_linha) * Vk**2) + ((1/Tkm) * Vk * Vm * (Bkm * math.cos(ThetaK - ThetaM) - Gkm * math.sin(ThetaK - ThetaM)))
 
 def Qkm_Destino(Gkm, Bkm, Tkm, Vk, Vm, ThetaK, ThetaM, Bsh_linha):
     # Vk é a tensão da barra i (destino)
-    # Fórmula: [ - (Bkm + Bsh_linha) ] * Vk^2 + (Vk Vm / Tkm) * [ Bkm cos(...) - Gkm sin(...) ]
     return ((-1 * (Bkm + Bsh_linha)) * Vk**2) + ((1/Tkm) * Vk * Vm * (Bkm * math.cos(ThetaK - ThetaM) - Gkm * math.sin(ThetaK - ThetaM)))
 
 
@@ -294,13 +288,7 @@ for i in range(1, quantDeBarras + 1):
         termos.append(termo)
 
     # QSHk é a potência reativa do shunt da barra: Bshk * V_i^2
-    # É necessário garantir que Vk_destino exista, o que ocorre apenas se a barra i for destino de alguma linha.
-    # Caso contrário, Bshk * V_i^2 = 0.
-    Vk_i = Vk_destino if 'Vk_destino' in locals() else 0
-    cursor.execute("SELECT V FROM dadosbarra WHERE barra = %s", (i,))
-    Vk_i = cursor.fetchone()[0]
-    
-    QSHk = Bshk * (Vk_i**2)
+    QSHk = Bshk * (Vk_destino**2 if 'Vk_destino' in locals() else 0) 
     
     resultadoRest2F = potencia_refluxo_i - Qg + Qc - QSHk
 
