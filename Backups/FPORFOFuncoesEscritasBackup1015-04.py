@@ -314,7 +314,6 @@ for linha in linhas_data.values():
 print("\n[OK] Função Objetivo Simbólica f(x) montada.")
 
 # --- Montagem das Restrições de Igualdade g(x) ---
-ignora = 1 # Barra slack
 # (O código para montar g(x) e h(x) permanece aqui, sem alterações)
 # ...
 # Balanço de Potência Ativa (P)
