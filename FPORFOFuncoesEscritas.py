@@ -158,7 +158,7 @@ for i in range(1, quantDeBarras + 1):
     resultadoRest1F = Pg - Pc - potencia_fluxo_i
     funcRest1 = " ".join(termos)
     funcRest1Escrita += f"\nRestrição da Barra {i}:\n{Pg} - ({Pc}) - ({funcRest1}) = {resultadoRest1F}\n ----------------------- X --------------------- \n"
-    funcHxEscrita += f"{Pg} - ({Pc}) - ({funcRest1}) + S{i} - R{i} + \n"
+    funcHxEscrita += f"{Pg} - ({Pc}) - ({funcRest1}) + \n"
 
 
 # ============================
@@ -244,9 +244,9 @@ for i in range(1, quantDeBarras + 1):
     restricao2 = " + ".join(termos)
     funcRest2Escrita += f"\nRestrição da Barra {i}:\n{Qg} + {QSHk} - {Qc} - ({restricao2}) = {resultadoRest2F}\n ----------------------- X --------------------- \n"
     if i < quantDeBarras:
-        funcHxEscrita += f"{Qg} + {QSHk} - {Qc} - ({restricao2}) + S{i} - R{i} + \n"
+        funcHxEscrita += f"{Qg} + {QSHk} - {Qc} - ({restricao2}) + \n"
     elif i == quantDeBarras:
-        funcHxEscrita += f"{Qg} + {QSHk} - {Qc} - ({restricao2}) + S{i} - R{i}\n"
+        funcHxEscrita += f"{Qg} + {QSHk} - {Qc} - ({restricao2})\n"
 
 funcGxEscrita = ""
 
@@ -258,7 +258,7 @@ for i in range(1, quantDeBarras + 1):
         continue
     termo3 = f"{Qmin_G} <= QG{i} <= {Qmax_G}"
     funcRest3Escrita += f"\nRestrição de Qg da Barra {i}:\n{termo3} --> {Qg}\n-----------------------------\n"
-    funcGxEscrita += f" Qg{i} +"
+    funcGxEscrita += f"(-Qg{i} {Qmin_G} + S{i} - R{i}) + (Qg{i} - {Qmax_G} + S{i} - R{i}) + "
 
 funcRest4Escrita = ""
 for i in range(1, quantDeBarras + 1):
@@ -267,7 +267,7 @@ for i in range(1, quantDeBarras + 1):
     V = result[0]
     termo4 = f"{10.0} <= {V} <= {10.0}"
     funcRest4Escrita += f"\nRestrição de Tensão da Barra {i}:\n{termo4}\n-----------------------------\n"
-    funcGxEscrita += f" V{i} +"
+    funcGxEscrita += f" (-V{i} - 10.0) + (V{i} - 10.0) + "
 
 funcRest5Escrita = ""
 cursor.execute("SELECT Linha, Barra_Origem, Barra_Destino FROM dadoslinha")
@@ -280,9 +280,9 @@ for linha_id, barraOrigem, barraDestino in todas_linhas:
     termo5 = f"10 <= T{barraOrigem}_{barraDestino} <= 10"
     funcRest5Escrita += f"\nRestrição de Tap da Linha {linha_id} (Barra {barraOrigem} - Barra {barraDestino}):\n{termo5}\n-----------------------------\n"
     if linha_id < len(todas_linhas):
-        funcGxEscrita += f" Tap{barraOrigem}_{barraDestino} +"
+        funcGxEscrita += f"(-Tap{barraOrigem}_{barraDestino} - 10) + (Tap{barraOrigem}_{barraDestino} - 10) + "
     else:
-        funcGxEscrita += f" Tap{barraOrigem}_{barraDestino}"
+        funcGxEscrita += f"(-Tap{barraOrigem}_{barraDestino} - 10) + (Tap{barraOrigem}_{barraDestino} - 10)"
 
 # Fechando a conexão
 cursor.close()
@@ -312,3 +312,31 @@ print(funcHxEscrita)
 print("__________________X__________________")
 print("Restrição G(x): \n")
 print(f"{funcGxEscrita} = 0")
+
+# Exemplo simbólico com sympy para montar a expressão LPIP visualmente
+import sympy as sp
+
+# parâmetros / incógnitas simbólicas
+rho, mu = sp.symbols('rho mu', positive=True)
+p = 3  # exemplo: número de slacks
+# função objetivo simbólica f(x) (simples para exemplo)
+f = sp.symbols('f')
+
+# criar vetores simbólicos s1..sp, r1..rp, lambda_j (m), pi_i (p), ri_i (p)
+s = sp.symbols('s1:%d' % (p+1), positive=True)   # s1, s2, s3
+r = sp.symbols('r1:%d' % (p+1), positive=True)   # r1, r2, r3
+
+# exemplo de somas (substitua g_terms, h_terms, etc., pelas suas expressões reais)
+# aqui usamos símbolos placeholders para g (multiplicadores lambda) e h (igualdades)
+lambda_vars = sp.symbols('lam1:%d' % (p+1))
+pi_vars = sp.symbols('pi1:%d' % (p+1))
+r_i_vars = sp.symbols('rho_i1:%d' % (p+1))  # renomeei para evitar colisão com rho
+
+# termo de barreira: -mu * sum( ln(s_i) + ln(r_i) )
+barrier = -mu * sum(sp.log(si) + sp.log(ri) for si,ri in zip(s,r))
+
+# montar expressão simplificada (substitua os termos de g e h conforme necessário)
+LPIP = f"{rho} * {f} + {barrier} + sum(lambda*{funcGxEscrita}) + sum(pi*({funcHxEscrita})) + sum({r_i_vars})" # + outros termos: + sum(lambda*g(x)) + sum(pi*(h+s-r)) + sum(r_i)
+
+print("LPIP: \n")
+print(LPIP)
